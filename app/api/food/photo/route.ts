@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { searchByImage } from "@/lib/calorieninjas";
+import { searchByImage } from "@/lib/gemini";
 
 export async function POST(request: NextRequest) {
   const formData = await request.formData();
@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
         .from("foods")
         .select("*")
         .ilike("name", item.name)
-        .eq("source", "calorieninjas")
+        .eq("source", "gemini")
         .maybeSingle();
 
       if (existing) return { ...existing, serving_size_g: item.serving_size_g };
@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
           fiber_g: item.per100g.fiber_g,
           sugar_g: item.per100g.sugar_g,
           sodium_mg: item.per100g.sodium_mg,
-          source: "calorieninjas",
+          source: "gemini",
         })
         .select()
         .single();

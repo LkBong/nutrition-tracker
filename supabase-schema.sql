@@ -1,5 +1,5 @@
--- Enable trigram extension for fuzzy name search
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
+-- NOTE: Enable pg_trgm via Supabase Dashboard → Database → Extensions first
+-- Then run the rest of this file in SQL Editor
 
 -- ============================================================
 -- PROFILES (extends auth.users)
