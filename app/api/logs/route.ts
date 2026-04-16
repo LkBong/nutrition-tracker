@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -65,6 +65,33 @@ export async function POST(request: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  return NextResponse.json(data);
+}
+
+export async function PATCH(request: NextRequest) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const body = await request.json();
+  const { id, quantity_g, meal_type } = body;
+  if (!id) return NextResponse.json({ error: "Missing log id" }, { status: 400 });
+
+  const updates: Record<string, unknown> = {};
+  if (quantity_g != null) updates.quantity_g = quantity_g;
+  if (meal_type != null) updates.meal_type = meal_type;
+
+  const service = createServiceClient();
+  const { data, error } = await service
+    .from("food_logs")
+    .update(updates)
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .select(`id, meal_type, quantity_g, logged_at,
+      foods (name, brand, calories_kcal, protein_g, fat_g, carbs_g, fiber_g, sugar_g, sodium_mg)`)
+    .single();
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data);
 }
 
