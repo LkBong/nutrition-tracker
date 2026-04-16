@@ -10,7 +10,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Missing image file" }, { status: 400 });
   }
 
-  const items = await searchByImage(file);
+  let items;
+  try {
+    items = await searchByImage(file);
+  } catch (err) {
+    console.error("[photo] Gemini error:", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "AI recognition failed" },
+      { status: 502 }
+    );
+  }
 
   if (!items.length) {
     return NextResponse.json({ error: "No food detected in image" }, { status: 404 });
