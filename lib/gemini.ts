@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 import type { NutrientsPer100g } from "./nutrients";
 
 export interface NormalizedFoodItem {
@@ -19,6 +19,8 @@ interface GeminiItem {
   sugar_g_per100g?: number;
   sodium_mg_per100g?: number;
 }
+
+const MODEL = "gemini-2.5-flash-lite";
 
 const NUTRITION_JSON_SCHEMA = `{
   "items": [
@@ -59,13 +61,11 @@ Rules:
 Return this exact JSON structure:
 ${NUTRITION_JSON_SCHEMA}`;
 
-function getModel() {
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-  return genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+function getClient() {
+  return new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 }
 
 function parseGeminiResponse(text: string): NormalizedFoodItem[] {
-  // Strip markdown code fences if present
   const cleaned = text.replace(/```(?:json)?\n?/g, "").trim();
 
   let parsed: { items: GeminiItem[] };
@@ -98,26 +98,27 @@ function round(n: number): number {
 
 /** Natural language text query → nutrition per 100g for each item */
 export async function searchByText(query: string): Promise<NormalizedFoodItem[]> {
-  const model = getModel();
-  const result = await model.generateContent(TEXT_PROMPT(query));
-  return parseGeminiResponse(result.response.text());
+  const ai = getClient();
+  const response = await ai.models.generateContent({
+    model: MODEL,
+    contents: TEXT_PROMPT(query),
+  });
+  return parseGeminiResponse(response.text ?? "");
 }
 
 /** Image file → identify foods → nutrition per 100g for each */
 export async function searchByImage(file: File): Promise<NormalizedFoodItem[]> {
-  const model = getModel();
+  const ai = getClient();
 
-  // Convert file to base64
   const buffer = await file.arrayBuffer();
   const base64 = Buffer.from(buffer).toString("base64");
 
-  const imagePart = {
-    inlineData: {
-      data: base64,
-      mimeType: file.type || "image/jpeg",
-    },
-  };
-
-  const result = await model.generateContent([IMAGE_PROMPT, imagePart]);
-  return parseGeminiResponse(result.response.text());
+  const response = await ai.models.generateContent({
+    model: MODEL,
+    contents: [
+      { text: IMAGE_PROMPT },
+      { inlineData: { mimeType: file.type || "image/jpeg", data: base64 } },
+    ],
+  });
+  return parseGeminiResponse(response.text ?? "");
 }
