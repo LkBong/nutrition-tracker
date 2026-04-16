@@ -21,7 +21,7 @@ export default function SignupPage() {
     setLoading(true);
 
     const supabase = createClient();
-    const { error } = await supabase.auth.signUp({ email, password });
+    const { data, error } = await supabase.auth.signUp({ email, password });
 
     if (error) {
       toast.error(error.message);
@@ -29,7 +29,13 @@ export default function SignupPage() {
       return;
     }
 
-    toast.success("Account created! Redirecting…");
+    // If session is null, email confirmation is required
+    if (!data.session) {
+      toast.success("Check your email to confirm your account, then sign in.");
+      setLoading(false);
+      return;
+    }
+
     router.push("/onboarding");
     router.refresh();
   }

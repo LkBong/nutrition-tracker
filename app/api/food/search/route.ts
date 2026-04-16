@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { searchByText } from "@/lib/calorieninjas";
+import { searchByText } from "@/lib/gemini";
 
 export async function GET(request: NextRequest) {
   const query = request.nextUrl.searchParams.get("q");
@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
         .from("foods")
         .select("*")
         .ilike("name", item.name)
-        .eq("source", "calorieninjas")
+        .eq("source", "gemini")
         .maybeSingle();
 
       if (existing) return { ...existing, serving_size_g: item.serving_size_g };
@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
           fiber_g: item.per100g.fiber_g,
           sugar_g: item.per100g.sugar_g,
           sodium_mg: item.per100g.sodium_mg,
-          source: "calorieninjas",
+          source: "gemini",
         })
         .select()
         .single();
