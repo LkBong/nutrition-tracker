@@ -1,83 +1,32 @@
-# Nutrition Tracker App — Implementation Plan
+# Nutrition Tracker — Developer Reference
 
-## Context
+## Overview
 
-Build a personal nutrition tracking PWA (Progressive Web App) that works on both laptop and iPhone via Safari. The app allows a single user to log food by scanning barcodes, taking photos for AI recognition, or searching by text — then visualises daily and weekly nutrition data in a dashboard.
+A personal nutrition tracking PWA built with Next.js 16, Supabase, and Google Gemini. Users log food via barcode scan, photo recognition, or natural language text. Daily and weekly nutrition data is visualised on a dashboard.
 
----
-
-## Stack
-
-| Layer | Choice | Why |
-|---|---|---|
-| Framework | Next.js 14 (App Router) + TypeScript | Single codebase for web + PWA |
-| Styling | Tailwind CSS + shadcn/ui | Fast, accessible, mobile-first |
-| Database + Auth | Supabase (free tier) | Postgres + auth, no backend to manage |
-| Barcode scanning | `@zxing/browser` | Real-time barcode detection in camera stream |
-| Food photo AI | CalorieNinjas `/v1/imagetextnutrition` | Purpose-built food image → nutrition API; returns nutrients directly, no secondary lookup needed |
-| Nutrition data | CalorieNinjas `/v1/nutrition` + Open Food Facts (free) | CalorieNinjas handles natural-language text search; Open Food Facts for barcode lookups (no key needed) |
-| Charts | Recharts | SSR-compatible, simple React integration |
-| Deployment | Vercel (free tier) | Zero-config Next.js hosting |
-| PWA | `next-pwa` | Service worker + manifest generation |
+This document covers architecture, data flow, gotchas, and how to extend the app.
 
 ---
 
-## Data Model (Supabase)
+## Tech Stack
 
-```sql
--- Extends auth.users (created automatically by Supabase)
-CREATE TABLE profiles (
-  id               UUID PRIMARY KEY REFERENCES auth.users(id),
-  -- TDEE inputs (used to auto-calculate goals)
-  age_years        INT,
-  weight_kg        FLOAT,
-  height_cm        FLOAT,
-  sex              TEXT CHECK (sex IN ('male','female')),
-  activity_level   TEXT CHECK (activity_level IN ('sedentary','light','moderate','active','very_active')),
-  goal             TEXT CHECK (goal IN ('lose','maintain','gain')),
-  -- Manually overridable targets (NULL = use auto-calculated value)
-  calorie_goal_override     INT,
-  protein_goal_g_override   INT,
-  fat_goal_g_override       INT,
-  carbs_goal_g_override     INT,
-  created_at       TIMESTAMPTZ DEFAULT now()
-);
--- Effective goals are computed client-side:
--- if override is set → use override, else → compute from TDEE inputs
+| Layer | Library | Version | Notes |
+|---|---|---|---|
+| Framework | Next.js | 16.2.4 | App Router, TypeScript, Tailwind v4 |
+| UI | shadcn/ui | v4 | Uses `@base-ui/react` — NOT `@radix-ui` (type signatures differ) |
+| Database + Auth | Supabase | free tier | PostgreSQL + RLS + Auth |
+| Barcode scanning | `@zxing/browser` | latest | Continuous scan via `BrowserMultiFormatReader` |
+| Food AI | `@google/genai` | latest | Text search + photo recognition. NOT `@google/generative-ai` (deprecated) |
+| Charts | Recharts | v3 | PieChart (macro donut), LineChart (weekly trend) |
+| PWA | `@ducanh2912/next-pwa` | latest | Service worker + manifest |
+| Deployment | Vercel | free tier | HTTPS required for iOS camera |
 
--- Shared food cache (avoids re-querying external APIs)
-CREATE TABLE foods (
-  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name            TEXT NOT NULL,
-  barcode         TEXT UNIQUE,
-  brand           TEXT,
-  calories_kcal   FLOAT,   -- per 100g
-  protein_g       FLOAT,
-  fat_g           FLOAT,
-  carbs_g         FLOAT,
-  fiber_g         FLOAT,
-  sugar_g         FLOAT,
-  sodium_mg       FLOAT,
-  source          TEXT,    -- 'openfoodfacts' | 'calorieninjas' | 'manual'
-  external_id     TEXT,
-  created_at      TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX foods_barcode_idx ON foods(barcode);
-CREATE INDEX foods_name_trgm_idx ON foods USING gin(name gin_trgm_ops);
+### Critical build notes
 
--- Per-user meal log
-CREATE TABLE food_logs (
-  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id     UUID NOT NULL REFERENCES auth.users(id),
-  food_id     UUID NOT NULL REFERENCES foods(id),
-  meal_type   TEXT CHECK (meal_type IN ('breakfast','lunch','dinner','snack')),
-  quantity_g  FLOAT NOT NULL,
-  logged_at   TIMESTAMPTZ DEFAULT now()
-);
-CREATE INDEX food_logs_user_date ON food_logs(user_id, logged_at DESC);
-```
-
-Enable Row Level Security on `profiles` and `food_logs` so users can only read/write their own rows.
+- **Always use `--webpack` flag**: `next dev --webpack` / `next build --webpack`
+  - `@ducanh2912/next-pwa` injects webpack config. Next.js 16 defaults to Turbopack, which conflicts.
+  - Both `dev` and `build` scripts in `package.json` already include this flag.
+- **`proxy.ts` not `middleware.ts`**: Next.js 16 renamed the auth middleware convention. The exported function is also `proxy`, not `middleware`.
 
 ---
 
@@ -87,145 +36,308 @@ Enable Row Level Security on `profiles` and `food_logs` so users can only read/w
 nutrition-tracker/
 ├── app/
 │   ├── (auth)/
-│   │   ├── login/page.tsx
-│   │   └── signup/page.tsx
+│   │   ├── login/page.tsx          ← email/password login
+│   │   └── signup/page.tsx         ← signup + redirect to onboarding
 │   ├── (app)/
-│   │   ├── layout.tsx          ← bottom nav shell
-│   │   ├── dashboard/page.tsx  ← charts + daily summary
-│   │   ├── log/page.tsx        ← camera + search entry point
-│   │   ├── history/page.tsx    ← past logs by date
-│   │   └── settings/page.tsx   ← goals, profile
+│   │   ├── layout.tsx              ← bottom nav shell (BottomNav.tsx)
+│   │   ├── dashboard/page.tsx      ← daily summary + charts
+│   │   ├── log/page.tsx            ← camera + search entry point
+│   │   ├── history/page.tsx        ← past logs by date, grouped by meal
+│   │   └── settings/page.tsx       ← profile edit + goal overrides + sign out
 │   ├── api/
-│   │   ├── food/barcode/route.ts   ← Open Food Facts lookup
-│   │   ├── food/photo/route.ts     ← CalorieNinjas /v1/imagetextnutrition
-│   │   └── food/search/route.ts    ← CalorieNinjas /v1/nutrition (text)
-│   ├── layout.tsx              ← PWA meta tags, fonts
-│   └── page.tsx                ← redirect to /dashboard
+│   │   ├── food/barcode/route.ts   ← Open Food Facts lookup + foods cache
+│   │   ├── food/photo/route.ts     ← Gemini vision → nutrition JSON
+│   │   └── food/search/route.ts    ← Gemini text → nutrition JSON
+│   ├── api/logs/route.ts           ← GET (by date) + POST + DELETE food logs
+│   ├── onboarding/page.tsx         ← first-run TDEE wizard
+│   ├── layout.tsx                  ← root layout, PWA meta tags
+│   └── page.tsx                    ← redirect to /dashboard
 ├── components/
+│   ├── BottomNav.tsx               ← mobile nav (Dashboard / Log / History)
 │   ├── camera/
-│   │   ├── CameraView.tsx      ← unified camera (barcode + photo)
-│   │   └── BarcodeOverlay.tsx  ← SVG viewfinder
+│   │   └── CameraView.tsx          ← unified camera: barcode scan + photo capture + text fallback
 │   ├── dashboard/
-│   │   ├── DailySummaryCard.tsx
-│   │   ├── MacroDonut.tsx
 │   │   ├── CalorieProgressBar.tsx
-│   │   └── WeeklyTrendChart.tsx
-│   ├── food/
-│   │   ├── FoodSearchBar.tsx
-│   │   ├── FoodResultCard.tsx
-│   │   └── PortionSelector.tsx ← set grams + meal type before logging
-│   └── ui/                     ← shadcn components
+│   │   ├── MacroDonut.tsx          ← Recharts PieChart
+│   │   ├── WeeklyTrendChart.tsx    ← Recharts LineChart (7-day)
+│   │   └── NutrientGrid.tsx        ← fiber, sugar, sodium grid
+│   └── food/
+│       ├── FoodResultCard.tsx      ← result card with "Add" button
+│       ├── FoodSearchBar.tsx       ← natural language text input
+│       └── PortionSelector.tsx     ← gram adjuster + meal type picker
 ├── lib/
 │   ├── supabase/
-│   │   ├── client.ts           ← browser client
-│   │   └── server.ts           ← server component client
-│   ├── openfoodfacts.ts        ← barcode → nutrition
-│   ├── calorieninjas.ts        ← photo (/v1/imagetextnutrition) + text (/v1/nutrition)
-│   ├── tdee.ts                 ← BMR/TDEE calculation + macro splits
-│   └── nutrients.ts            ← scale nutrients by portion size
-├── public/
-│   ├── manifest.json
-│   └── icons/                  ← 192×192 and 512×512 PNG icons
-└── next.config.js              ← next-pwa config
+│   │   ├── client.ts               ← browser Supabase client
+│   │   └── server.ts               ← server component Supabase client
+│   ├── gemini.ts                   ← searchByText() + searchByImage()
+│   ├── openfoodfacts.ts            ← barcode → nutrition (no API key needed)
+│   ├── tdee.ts                     ← Mifflin-St Jeor BMR + TDEE + macro split
+│   ├── nutrients.ts                ← scaleNutrients(), sumNutrients()
+│   └── utils.ts                    ← shadcn utility (cn)
+├── proxy.ts                        ← auth middleware (protects /(app) routes)
+├── supabase-schema.sql             ← run in Supabase SQL Editor to set up DB
+└── public/
+    ├── manifest.json
+    └── icons/                      ← icon-192.png, icon-512.png
 ```
 
 ---
 
-## Key API Flows
+## Database Schema
 
-### 1. Camera view (unified)
-- `CameraView.tsx` opens device camera via `getUserMedia`
-- `@zxing/browser` scans every video frame for barcodes in the background
-- When a barcode is detected → calls `/api/food/barcode?code=...` → Open Food Facts
-- "Take Photo" button → captures frame → sends image to `/api/food/photo` → CalorieNinjas
-- If neither works → shows `FoodSearchBar` for text fallback
+Three tables. All nutrition values are stored **per 100g** and scaled at render time.
 
-### 2. Barcode flow (`/api/food/barcode`)
-1. Check `foods` table cache by barcode
-2. If miss → call `https://world.openfoodfacts.org/api/v2/product/{barcode}.json`
-3. Normalise response → insert into `foods` → return to client
+### `profiles`
+Extends `auth.users`. Stores TDEE inputs and optional manual goal overrides.
 
-### 3. Photo flow (`/api/food/photo`)
-1. Receive image file (multipart form data)
-2. Call CalorieNinjas `POST https://api.calorieninjas.com/v1/imagetextnutrition` with the image
-3. Response contains item name + full nutrition breakdown (calories, protein, fat, carbs, etc.) directly — no secondary lookup needed
-4. Normalise response → cache in `foods` → return to client with detected weight pre-filled
+```
+id                      UUID  PK → auth.users
+age_years               INT
+weight_kg               FLOAT
+height_cm               FLOAT
+sex                     TEXT  ('male' | 'female')
+activity_level          TEXT  ('sedentary' | 'light' | 'moderate' | 'active' | 'very_active')
+goal                    TEXT  ('lose' | 'maintain' | 'gain')
+calorie_goal_override   INT   NULL = use auto-calculated TDEE
+protein_goal_g_override INT   NULL = use macro split default
+fat_goal_g_override     INT
+carbs_goal_g_override   INT
+onboarding_complete     BOOL
+created_at              TIMESTAMPTZ
+```
 
-### 4. Text search (`/api/food/search?q=...`)
-1. Accept natural language query (e.g. `"2 scrambled eggs and a banana"`)
-2. Call CalorieNinjas `GET https://api.calorieninjas.com/v1/nutrition?query=...`
-3. Returns an array of matched food items each with full nutrition breakdown
-4. Cache any new items in `foods` table → return results to client
-5. User picks an item (or all) to log — portion is already embedded in the query
+Goal resolution (client-side, `lib/tdee.ts`):
+- If `*_override` is set → use that value
+- Otherwise → compute from TDEE: BMR (Mifflin-St Jeor) × activity multiplier × goal adjustment
+- Macro split defaults: protein 30%, fat 25%, carbs 45% of TDEE calories
+
+Auto-trigger `on_auth_user_created` inserts a blank `profiles` row on every signup.
+
+### `foods`
+Shared cache across all users. Avoids re-querying external APIs.
+
+```
+id            UUID  PK
+name          TEXT
+barcode       TEXT  UNIQUE (null for non-barcoded items)
+brand         TEXT
+calories_kcal FLOAT  per 100g
+protein_g     FLOAT
+fat_g         FLOAT
+carbs_g       FLOAT
+fiber_g       FLOAT
+sugar_g       FLOAT
+sodium_mg     FLOAT
+source        TEXT  ('openfoodfacts' | 'gemini' | 'manual')
+external_id   TEXT
+created_at    TIMESTAMPTZ
+```
+
+Indexed on `barcode` (b-tree) and `name` (pg_trgm GIN — enable via Supabase Dashboard → Database → Extensions before running schema SQL).
+
+### `food_logs`
+Per-user meal entries.
+
+```
+id         UUID  PK
+user_id    UUID  → auth.users
+food_id    UUID  → foods
+meal_type  TEXT  ('breakfast' | 'lunch' | 'dinner' | 'snack')
+quantity_g FLOAT
+logged_at  TIMESTAMPTZ
+```
+
+Indexed on `(user_id, logged_at DESC)` for efficient daily fetches.
+
+### RLS summary
+
+| Table | Read | Write |
+|---|---|---|
+| `profiles` | own row only | own row only |
+| `foods` | all authenticated | all authenticated (shared cache) |
+| `food_logs` | own rows only | own rows only |
 
 ---
 
-## Implementation Phases
+## API Routes
 
-### Phase 1 — Scaffold (foundation)
-- [ ] `npx create-next-app@latest nutrition-tracker --typescript --tailwind --app`
-- [ ] Install: `@supabase/supabase-js @supabase/ssr shadcn/ui next-pwa @zxing/browser recharts`
-- [ ] Supabase project: run schema SQL, enable RLS, add policies
-- [ ] `public/manifest.json` + icons
-- [ ] `next.config.js` with `next-pwa`
-- [ ] Mobile-first layout with bottom nav (Dashboard / Log / History)
+### `GET /api/food/barcode?code={barcode}`
+1. Check `foods` table for cached barcode
+2. On miss → fetch `https://world.openfoodfacts.org/api/v2/product/{barcode}.json`
+3. Normalise → upsert into `foods` → return `NormalizedFoodItem[]`
 
-### Phase 2 — Auth + Onboarding
-- [ ] Supabase email/password auth (no OAuth needed for personal use)
-- [ ] Login + signup pages
-- [ ] Middleware to protect `/(app)` routes
-- [ ] Auto-create `profiles` row on first login (Supabase trigger)
-- [ ] Onboarding wizard on first login: age, weight, height, sex, activity level, goal (lose/maintain/gain)
-- [ ] `lib/tdee.ts`: Mifflin-St Jeor BMR × activity multiplier → TDEE → macro split
-- [ ] Settings page: shows calculated targets with per-field manual override toggles
+### `POST /api/food/photo`
+Body: `multipart/form-data` with `image` file field.
+1. Read file → convert to base64
+2. Call `lib/gemini.ts → searchByImage(file)`
+3. Gemini identifies all visible food items, estimates portion weights, returns nutrition per 100g
+4. Cache results in `foods` table → return `NormalizedFoodItem[]`
 
-### Phase 3 — Food Identification
-- [ ] `CameraView.tsx`: `getUserMedia` with `facingMode: environment` for rear camera
-- [ ] `@zxing/browser` continuous barcode scan loop on video stream
-- [ ] `/api/food/barcode` route → Open Food Facts
-- [ ] Photo capture button → `/api/food/photo` → CalorieNinjas `/v1/imagetextnutrition`
-- [ ] `/api/food/search` → CalorieNinjas `/v1/nutrition` (natural language, e.g. "2 eggs")
-- [ ] `FoodSearchBar` text fallback UI with natural-language input hint
+### `GET /api/food/search?q={query}`
+1. Call `lib/gemini.ts → searchByText(query)`
+2. Gemini parses natural language (e.g. "2 scrambled eggs and toast") → per-item nutrition JSON
+3. Cache in `foods` → return `NormalizedFoodItem[]`
 
-### Phase 4 — Logging
-- [ ] `PortionSelector` component: adjust grams, pick meal type
-- [ ] `POST /api/logs` → insert into `food_logs`
-- [ ] Daily log view on `/history` grouped by meal type
-- [ ] Delete log entry
+### `GET /api/logs?date={YYYY-MM-DD}`
+Returns all `food_logs` for the authenticated user on the given date, joined with `foods`.
 
-### Phase 5 — Dashboard
-- [ ] Compute daily totals from `food_logs` (scale by `quantity_g / 100`)
-- [ ] `CalorieProgressBar`: actual vs goal
-- [ ] `MacroDonut`: protein / fat / carbs breakdown (Recharts PieChart)
-- [ ] `WeeklyTrendChart`: 7-day calorie line (Recharts LineChart)
-- [ ] Nutrient breakdown table (fiber, sugar, sodium)
+### `POST /api/logs`
+Body: `{ food_id, quantity_g, meal_type, logged_at? }`
+Inserts a `food_logs` row for the current user.
 
-### Phase 6 — PWA Polish
-- [ ] Test camera + barcode on iOS Safari (requires HTTPS — Vercel handles this)
-- [ ] Add `apple-touch-icon` + `apple-mobile-web-app-capable` meta tags
-- [ ] Service worker offline caching for app shell
-- [ ] "Add to Home Screen" prompt banner
+### `DELETE /api/logs?id={log_id}`
+Deletes a specific log entry (RLS enforces ownership).
+
+---
+
+## Key Library Details
+
+### `lib/gemini.ts`
+
+Uses `@google/genai` SDK (new package). Do **not** use `@google/generative-ai` (deprecated, v1beta endpoint).
+
+```typescript
+import { GoogleGenAI } from "@google/genai";
+const MODEL = "gemini-2.5-flash-lite";
+
+// Text: natural language → NormalizedFoodItem[]
+export async function searchByText(query: string): Promise<NormalizedFoodItem[]>
+
+// Photo: File → NormalizedFoodItem[]
+export async function searchByImage(file: File): Promise<NormalizedFoodItem[]>
+```
+
+Both return `NormalizedFoodItem[]`:
+```typescript
+interface NormalizedFoodItem {
+  name: string;
+  serving_size_g: number;   // estimated typical serving or visual portion
+  per100g: NutrientsPer100g;
+}
+```
+
+Prompt instructs Gemini to return a strict JSON schema — `parseGeminiResponse()` strips markdown fences then `JSON.parse()`s the result.
+
+### `lib/nutrients.ts`
+
+```typescript
+// Scale per-100g values to actual portion
+scaleNutrients(per100g: NutrientsPer100g, quantity_g: number): NutrientsPer100g
+
+// Sum an array of scaled nutrients (for daily totals)
+sumNutrients(items: NutrientsPer100g[]): NutrientsPer100g
+```
+
+### `lib/tdee.ts`
+
+```typescript
+// Full auto-calculated goals from body profile
+calculateGoals(inputs: TDEEInputs): NutritionGoals
+
+// Merge auto-calculated goals with any manual overrides from profiles row
+resolveGoals(profile: Profile): NutritionGoals
+```
+
+Mifflin-St Jeor BMR: `10×weight_kg + 6.25×height_cm − 5×age + (5 | −161)`
+Activity multipliers: sedentary 1.2 → very_active 1.9
+Goal adjustment: lose −500 kcal, maintain ±0, gain +300 kcal
 
 ---
 
 ## Environment Variables
 
 ```env
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=      # server-only (for admin DB ops)
-CALORIENINJAS_API_KEY=          # calorieninjas.com/api — photo + text nutrition
+NEXT_PUBLIC_SUPABASE_URL=          # Supabase project URL
+NEXT_PUBLIC_SUPABASE_ANON_KEY=     # Safe to expose — enforced by RLS
+SUPABASE_SERVICE_ROLE_KEY=         # Server-only — never expose to client
+GEMINI_API_KEY=                    # From aistudio.google.com/apikey
+```
+
+**Gemini API key**: get one free at [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Free tier: 1,500 req/day. Requires a Google Cloud billing account to be linked even for free usage — link one at [console.cloud.google.com/billing](https://console.cloud.google.com/billing) (no charges within free limits).
+
+---
+
+## Known Gotchas
+
+### shadcn Select `onValueChange` type
+shadcn v4 uses `@base-ui/react` which passes `string | null` (not `string`) to `onValueChange`. Always add a null fallback:
+```typescript
+onValueChange={(v) => setMealType(v ?? "snack")}
+```
+
+### Supabase schema setup order
+1. Enable `pg_trgm` via **Supabase Dashboard → Database → Extensions** (UI toggle) — do NOT use `CREATE EXTENSION` in SQL Editor, it aborts the transaction
+2. Then run `supabase-schema.sql` in the SQL Editor
+
+### Signup trigger
+The `on_auth_user_created` trigger must exist or signup returns `500 "database error saving new user"`. If it's missing, re-run the `DROP/CREATE TRIGGER` block from `supabase-schema.sql`.
+
+### Email confirmation
+Supabase enables email confirmation by default. For local/personal use, disable it: **Authentication → Providers → Email → disable "Confirm email"**.
+
+### Gemini model name
+Current working model: `gemini-2.5-flash-lite`. To verify available models for a given key:
+```
+GET https://generativelanguage.googleapis.com/v1beta/models?key=YOUR_KEY
 ```
 
 ---
 
-## Verification Checklist
+## Local Development
 
-- [ ] Barcode scan: hold phone over a food product → nutrients appear within 2s
-- [ ] Photo recognition: photo of an apple → CalorieNinjas returns nutrition breakdown directly
-- [ ] Text search: type "2 scrambled eggs and toast" → CalorieNinjas returns per-item breakdown
-- [ ] Log food: select portion + meal → appears in daily log
-- [ ] Dashboard: logged calories match sum of log entries
-- [ ] PWA install: visit on iPhone Safari → "Add to Home Screen" → opens full-screen
-- [ ] Camera works on iPhone: rear camera opens in `/log`, barcode auto-detects
-- [ ] RLS: only own logs visible (verify via Supabase table editor)
+```bash
+# Install dependencies
+npm install
+
+# Copy and fill in env vars
+cp .env.local.example .env.local
+
+# Start dev server (must use --webpack, already set in package.json)
+npm run dev
+# → http://localhost:3000 (or 3001 if 3000 is taken)
+```
+
+### Supabase setup (one-time)
+1. Create a project at [supabase.com](https://supabase.com)
+2. Dashboard → Database → Extensions → enable `pg_trgm`
+3. Dashboard → SQL Editor → paste and run `supabase-schema.sql`
+4. Dashboard → Authentication → Providers → Email → disable "Confirm email"
+5. Copy `Project URL` and `anon key` into `.env.local`
+
+### Production build
+
+```bash
+npm run build   # next build --webpack
+npm start
+```
+
+---
+
+## Deployment (Vercel)
+
+HTTPS is required for iOS camera (`getUserMedia` with `facingMode: environment` is blocked on non-secure origins). Vercel provides HTTPS automatically.
+
+1. Push to GitHub
+2. Import repo at [vercel.com/new](https://vercel.com/new)
+3. Add all four environment variables in Vercel → Project → Settings → Environment Variables
+4. Deploy
+
+### iPhone PWA install
+After deploying: open the Vercel URL in Safari → tap the Share button → "Add to Home Screen". The app will open full-screen with bottom nav, just like a native app.
+
+---
+
+## Extending the App
+
+### Adding a new nutrient field
+1. Add column to `foods` table in Supabase
+2. Update `NutrientsPer100g` type in `lib/nutrients.ts`
+3. Update `scaleNutrients` and `sumNutrients` to include the field
+4. Update Gemini prompts in `lib/gemini.ts` to request the field
+5. Update `NutrientGrid.tsx` (or wherever it's displayed) to render it
+
+### Swapping the AI provider
+`lib/gemini.ts` exports `searchByText(query)` and `searchByImage(file)` — both return `NormalizedFoodItem[]`. Swap the implementation inside those functions. The API routes and UI don't need to change.
+
+### Adding OAuth login
+Supabase Auth supports Google, GitHub, Apple etc. Add a provider in Supabase Dashboard → Authentication → Providers, then call `supabase.auth.signInWithOAuth()` from the login page.
