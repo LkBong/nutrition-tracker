@@ -11,22 +11,24 @@ export async function GET(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data, error } = await supabase
+  const { data: logs } = await supabase
     .from("food_logs")
-    .select("foods(*)")
+    .select("food_id")
     .eq("user_id", user.id)
-    .ilike("foods.name", `%${q.trim()}%`)
     .order("logged_at", { ascending: false })
-    .limit(40);
+    .limit(200);
+
+  const foodIds = [...new Set((logs ?? []).map((l) => l.food_id))];
+  if (!foodIds.length) return NextResponse.json([]);
+
+  const { data, error } = await supabase
+    .from("foods")
+    .select("*")
+    .in("id", foodIds)
+    .ilike("name", `%${q.trim()}%`)
+    .limit(8);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Deduplicate by food id, preserving most-recent-first order
-  const seen = new Set<string>();
-  const unique = (data ?? [])
-    .map((row) => row.foods)
-    .filter((f): f is NonNullable<typeof f> => !!f && !seen.has((f as { id: string }).id) && seen.add((f as { id: string }).id) === undefined)
-    .slice(0, 8);
-
-  return NextResponse.json(unique);
+  return NextResponse.json(data ?? []);
 }
