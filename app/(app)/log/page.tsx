@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { Camera, Check, ChevronDown, ChevronUp } from "lucide-react";
+import { Camera, Check, ChevronDown, ChevronUp, PencilLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import { getMealTypeFromHour } from "@/lib/mealType";
 import CameraView from "@/components/camera/CameraView";
 import FoodSearchBar from "@/components/food/FoodSearchBar";
+import ManualEntryDialog from "@/components/food/ManualEntryDialog";
 import type { FoodItem } from "@/components/food/FoodResultCard";
 
 type NutrientField = "calories_kcal" | "protein_g" | "fat_g" | "carbs_g" | "fiber_g" | "sugar_g" | "sodium_mg";
@@ -60,6 +61,7 @@ function toNutrientEdit(food: FoodItem): NutrientEdit {
 
 export default function LogPage() {
   const [showCamera, setShowCamera] = useState(false);
+  const [showManual, setShowManual] = useState(false);
   const [results, setResults] = useState<FoodItem[]>([]);
   const [selections, setSelections] = useState<Record<string, Selection>>({});
   const [mealType, setMealType] = useState(() => getMealTypeFromHour(new Date().getHours()));
@@ -109,6 +111,24 @@ export default function LogPage() {
         ...prev[key],
         nutrients: { ...prev[key].nutrients, [field]: value },
         nutrientsEdited: true,
+      },
+    }));
+  }
+
+  function handleManualAdd(food: FoodItem, quantity_g: number) {
+    const key = getKey(food);
+    setResults((prev) => {
+      if (prev.find((f) => getKey(f) === key)) return prev;
+      return [...prev, food];
+    });
+    setSelections((prev) => ({
+      ...prev,
+      [key]: {
+        checked: true,
+        quantity: String(quantity_g),
+        expanded: false,
+        nutrients: toNutrientEdit(food),
+        nutrientsEdited: false,
       },
     }));
   }
@@ -194,6 +214,24 @@ export default function LogPage() {
             <div className="flex-1 border-t" />
           </div>
           <FoodSearchBar onFoodsFound={handleFoodsFound} />
+          <div className="relative flex items-center">
+            <div className="flex-1 border-t" />
+            <span className="mx-3 text-xs text-muted-foreground">or</span>
+            <div className="flex-1 border-t" />
+          </div>
+          <Button
+            variant="outline"
+            className="w-full"
+            onClick={() => setShowManual(true)}
+          >
+            <PencilLine className="mr-2 h-4 w-4" />
+            Manual Entry
+          </Button>
+          <ManualEntryDialog
+            open={showManual}
+            onOpenChange={setShowManual}
+            onAdd={handleManualAdd}
+          />
         </>
       )}
 
