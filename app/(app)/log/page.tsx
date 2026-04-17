@@ -13,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { getMealTypeFromHour } from "@/lib/mealType";
 import CameraView from "@/components/camera/CameraView";
 import FoodSearchBar from "@/components/food/FoodSearchBar";
 import type { FoodItem } from "@/components/food/FoodResultCard";
@@ -61,7 +62,7 @@ export default function LogPage() {
   const [showCamera, setShowCamera] = useState(false);
   const [results, setResults] = useState<FoodItem[]>([]);
   const [selections, setSelections] = useState<Record<string, Selection>>({});
-  const [mealType, setMealType] = useState("snack");
+  const [mealType, setMealType] = useState(() => getMealTypeFromHour(new Date().getHours()));
   const [logging, setLogging] = useState(false);
 
   function handleFoodsFound(foods: FoodItem[]) {
