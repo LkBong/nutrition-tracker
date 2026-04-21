@@ -29,7 +29,7 @@ There are two ways to use this app:
 
 ## Option A — Use the hosted version
 
-Visit the app at **[your-deployment-url.vercel.app]** and click **Create account**. That's it.
+Visit the app at **[nutrition-tracker-kappa.vercel.app]** and click **Create account**. That's it.
 
 ### First run
 After signing up you'll go through a short setup wizard: age, weight, height, sex, activity level, and goal (lose / maintain / gain). Your daily calorie and macro targets are calculated automatically — you can adjust them any time in Settings.
